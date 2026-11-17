@@ -1,6 +1,9 @@
-# VS Code Coding Bot
+# Loggy Bot - VS Code Automation & Self-Correcting Coding Agent
 
-A Python automation script that opens Visual Studio Code, creates a file, writes code, saves it, and executes it in the integrated terminal.
+This repository contains two autonomous coding tools:
+
+1. **VS Code Coding Bot** - UI automation for writing and running code in VS Code
+2. **Self-Correcting Coding Bot** - AI-powered agent that generates, tests, and fixes code using NVIDIA API
 
 ## Features
 
@@ -161,6 +164,116 @@ MIT License - Feel free to use and modify.
 1. Fork the repository
 2. Create a feature branch
 3. Submit a pull request
+
+---
+
+## Self-Correcting Coding Bot (`self_correcting_coding_bot.py`)
+
+A fully autonomous AI coding agent that:
+- Takes a high-level programming goal from the user
+- Uses **NVIDIA API** (via OpenAI SDK) to generate code iteratively
+- Writes files to disk and opens them in **VS Code** for live viewing
+- Executes code, captures errors, and **self-corrects** automatically
+- Runs purely on CLI/API operations (no GUI automation required)
+
+### Features
+
+- **Autonomous Loop**: Goal → Generate → Write → Execute → Fix → Repeat
+- **Structured JSON Output**: LLM forced to return valid JSON with `thought_process`, `filename`, `code_content`, `next_step`, `status`
+- **Self-Correction**: On execution error, feeds stderr back to LLM to fix the same file
+- **VS Code Integration**: Opens each generated file via `code --reuse-window`
+- **Safety Limits**: `MAX_ITERATIONS` (default 20), execution timeout, graceful Ctrl+C handling
+- **Complete Context**: Maintains project files, execution history, and conversation state
+
+### Quick Start
+
+```bash
+# Clone and setup
+git clone https://github.com/ai-patrick/loggy-bot.git
+cd loggy-bot
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Configure API (get key from https://build.nvidia.com/)
+cp .env.example .env
+# Edit .env with your NVIDIA_API_KEY
+
+# Run the bot
+python self_correcting_coding_bot.py
+```
+
+### Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MAX_ITERATIONS` | Hard limit on agent loops | 20 |
+| `EXECUTION_TIMEOUT` | Seconds before killing script | 30 |
+| `VSCODE_REUSE_WINDOW` | Use `--reuse-window` flag | true |
+| `NVIDIA_API_URL` | NVIDIA API endpoint | `https://integrate.api.nvidia.com/v1` |
+| `NVIDIA_DEFAULT_MODEL` | Model to use | `nvidia/nemotron-3-ultra` |
+
+### How the Self-Correction Loop Works
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    AGENT LOOP                                │
+├─────────────────────────────────────────────────────────────┤
+│  1. USER GOAL                                                │
+│     ↓                                                        │
+│  2. LLM GENERATES (JSON)                                     │
+│     - thought_process: reasoning                             │
+│     - filename: target file                                  │
+│     - code_content: complete file                            │
+│     - next_step: what to do next                             │
+│     - status: continue/complete/error                        │
+│     ↓                                                        │
+│  3. WRITE FILE → OPEN IN VS CODE                             │
+│     ↓                                                        │
+│  4. EXECUTE (python3 filename)                               │
+│     ↓                                                        │
+│  5a. SUCCESS → Save output → LLM plans NEXT step            │
+│  5b. ERROR   → Feed stderr to LLM → LLM FIXES same file     │
+│     ↓                                                        │
+│  6. REPEAT until status="complete" or MAX_ITERATIONS        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Example Goals
+
+```bash
+# Simple script
+"Create a Python script that calculates prime numbers up to N and tests it"
+
+# With tests
+"Build a TODO list CLI app with add/list/remove commands and JSON persistence"
+
+# Multi-file project
+"Create a Flask REST API with user authentication (register/login) and SQLite database"
+```
+
+### Requirements
+
+- **Python 3.8+**
+- **VS Code** with `code` CLI in PATH
+- **NVIDIA API Key** from [build.nvidia.com](https://build.nvidia.com/)
+- **Dependencies**: `openai>=1.0.0`, `python-dotenv>=1.0.0`
+
+### Environment Variables (`.env`)
+
+```bash
+NVIDIA_API_KEY=your_api_key_here
+NVIDIA_API_URL=https://integrate.api.nvidia.com/v1
+NVIDIA_DEFAULT_MODEL=nvidia/nemotron-3-ultra
+```
+
+### Safety Features
+
+- **MAX_ITERATIONS**: Hard limit prevents infinite loops / credit burn
+- **Execution Timeout**: Kills runaway scripts (default 30s)
+- **Graceful Shutdown**: Ctrl+C finishes current iteration then exits
+- **No PyAutoGUI**: Pure CLI/API - works on Wayland, headless servers, CI/CD
+- **JSON Schema Enforcement**: `response_format={"type": "json_object"}` guarantees parseable output
 
 ---
 
