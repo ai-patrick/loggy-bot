@@ -13,5 +13,10 @@ env/
 .DS_Store
 Thumbs.db
 
-# Generated files
+# Generated files (from bot runs)
+*_bot.py
 bot_output.py
+calculator.py
+factorial.py
+api_client.py
+hello_bot.py
