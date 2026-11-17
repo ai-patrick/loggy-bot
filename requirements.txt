@@ -1,3 +1,5 @@
 # Self-Correcting Coding Bot Dependencies
 openai>=1.0.0
 python-dotenv>=1.0.0
+pyautogui>=0.9.54
+pyperclip>=1.8.2

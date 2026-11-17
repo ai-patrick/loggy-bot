@@ -173,17 +173,62 @@ A fully autonomous AI coding agent that:
 - Takes a high-level programming goal from the user
 - Uses **NVIDIA API** (via OpenAI SDK) to generate code iteratively
 - Writes files to disk and opens them in **VS Code** for live viewing
+- **Visually simulates human typing** in VS Code (character-by-character)
 - Executes code, captures errors, and **self-corrects** automatically
-- Runs purely on CLI/API operations (no GUI automation required)
+- Runs purely on CLI/API operations with optional GUI visualization
 
 ### Features
 
 - **Autonomous Loop**: Goal → Generate → Write → Execute → Fix → Repeat
+- **Human Typing Visual Effect**: Watches the AI "think" and "type" code in real-time
 - **Structured JSON Output**: LLM forced to return valid JSON with `thought_process`, `filename`, `code_content`, `next_step`, `status`
 - **Self-Correction**: On execution error, feeds stderr back to LLM to fix the same file
 - **VS Code Integration**: Opens each generated file via `code --reuse-window`
 - **Safety Limits**: `MAX_ITERATIONS` (default 20), execution timeout, graceful Ctrl+C handling
 - **Complete Context**: Maintains project files, execution history, and conversation state
+- **Graceful Fallback**: If visual typing fails (headless/Wayland), file on disk remains correct
+
+### Human Typing Visual Effect
+
+**Architecture: Write First, Type Second**
+
+To prevent a single missed keystroke from breaking the script, the bot follows a strict **Write First, Type Second** architecture:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  1. LLM generates complete code                                │
+│  2. Bot writes PERFECT code to disk via open().write()  ◀──┐  │
+│  3. Bot opens file in VS Code via `code --reuse-window`     │  │
+│  4. Bot simulates human typing (pyautogui) visually         │  │
+│     - Select all (Ctrl/Cmd+A) → Backspace to clear          │  │
+│     - Types line-by-line with configurable speed            │  │
+│     - Presses Enter between lines                           │  │
+│     - Saves (Ctrl/Cmd+S) when done                          │  │
+│  5. If pyautogui FAILS → File on disk is ALREADY CORRECT   ◀──┘  │
+│  6. Execution runs the disk file normally                    │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Why this matters:**
+- The file on disk is **always** the authoritative, correct version
+- Visual typing is purely cosmetic - execution never depends on it
+- Works on headless servers/CI/CD (falls back gracefully)
+- No risk of partial/incomplete code breaking the execution loop
+
+**Configuration (at top of script):**
+```python
+HUMAN_TYPING = True              # Enable/disable visual typing
+TYPING_SPEED = 0.01              # Interval between keystrokes (seconds)
+TYPING_LINE_DELAY = 0.05         # Delay between lines (seconds)
+VSCODE_FOCUS_DELAY = 1.5         # Seconds to wait for VS Code to focus
+```
+
+**Cross-Platform Shortcuts:**
+| Platform | Modifier Key | Select All | Save |
+|----------|--------------|------------|------|
+| macOS    | `command`    | `Cmd+A`    | `Cmd+S` |
+| Windows  | `ctrl`       | `Ctrl+A`   | `Ctrl+S` |
+| Linux    | `ctrl`       | `Ctrl+A`   | `Ctrl+S` |
 
 ### Quick Start
 
@@ -210,8 +255,12 @@ python self_correcting_coding_bot.py
 | `MAX_ITERATIONS` | Hard limit on agent loops | 20 |
 | `EXECUTION_TIMEOUT` | Seconds before killing script | 30 |
 | `VSCODE_REUSE_WINDOW` | Use `--reuse-window` flag | true |
+| `HUMAN_TYPING` | Enable visual typing simulation | true |
+| `TYPING_SPEED` | Keystroke interval (seconds) | 0.01 |
+| `TYPING_LINE_DELAY` | Delay between lines (seconds) | 0.05 |
+| `VSCODE_FOCUS_DELAY` | VS Code focus wait (seconds) | 1.5 |
 | `NVIDIA_API_URL` | NVIDIA API endpoint | `https://integrate.api.nvidia.com/v1` |
-| `NVIDIA_DEFAULT_MODEL` | Model to use | `nvidia/nemotron-3-ultra` |
+| `NVIDIA_DEFAULT_MODEL` | Model to use | `nvidia/nemotron-3-ultra-550b-a55b` |
 
 ### How the Self-Correction Loop Works
 
@@ -228,14 +277,16 @@ python self_correcting_coding_bot.py
 │     - next_step: what to do next                             │
 │     - status: continue/complete/error                        │
 │     ↓                                                        │
-│  3. WRITE FILE → OPEN IN VS CODE                             │
+│  3. WRITE FILE TO DISK (authoritative version)              │
 │     ↓                                                        │
-│  4. EXECUTE (python3 filename)                               │
+│  4. OPEN IN VS CODE + VISUAL TYPING (cosmetic)             │
 │     ↓                                                        │
-│  5a. SUCCESS → Save output → LLM plans NEXT step            │
-│  5b. ERROR   → Feed stderr to LLM → LLM FIXES same file     │
+│  5. EXECUTE (python3 filename)                               │
 │     ↓                                                        │
-│  6. REPEAT until status="complete" or MAX_ITERATIONS        │
+│  6a. SUCCESS → Save output → LLM plans NEXT step            │
+│  6b. ERROR   → Feed stderr to LLM → LLM FIXES same file     │
+│     ↓                                                        │
+│  7. REPEAT until status="complete" or MAX_ITERATIONS        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -257,14 +308,15 @@ python self_correcting_coding_bot.py
 - **Python 3.8+**
 - **VS Code** with `code` CLI in PATH
 - **NVIDIA API Key** from [build.nvidia.com](https://build.nvidia.com/)
-- **Dependencies**: `openai>=1.0.0`, `python-dotenv>=1.0.0`
+- **Dependencies**: `openai>=1.0.0`, `python-dotenv>=1.0.0`, `pyautogui>=0.9.54`, `pyperclip>=1.8.2`
+- **Optional (for visual typing)**: X11 display or Wayland with XWayland
 
 ### Environment Variables (`.env`)
 
 ```bash
 NVIDIA_API_KEY=your_api_key_here
 NVIDIA_API_URL=https://integrate.api.nvidia.com/v1
-NVIDIA_DEFAULT_MODEL=nvidia/nemotron-3-ultra
+NVIDIA_DEFAULT_MODEL=nvidia/nemotron-3-ultra-550b-a55b
 ```
 
 ### Safety Features
@@ -272,7 +324,9 @@ NVIDIA_DEFAULT_MODEL=nvidia/nemotron-3-ultra
 - **MAX_ITERATIONS**: Hard limit prevents infinite loops / credit burn
 - **Execution Timeout**: Kills runaway scripts (default 30s)
 - **Graceful Shutdown**: Ctrl+C finishes current iteration then exits
-- **No PyAutoGUI**: Pure CLI/API - works on Wayland, headless servers, CI/CD
+- **Write First, Type Second**: File on disk is ALWAYS correct; visual typing is cosmetic
+- **Graceful Fallback**: If pyautogui unavailable (headless/Wayland), logs warning and continues
+- **PyAutoGUI Failsafe**: Move mouse to top-left corner (0,0) to emergency stop visual typing
 - **JSON Schema Enforcement**: `response_format={"type": "json_object"}` guarantees parseable output
 
 ---

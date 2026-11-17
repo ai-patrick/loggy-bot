@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """
-Self-Correcting Coding Bot
-==========================
+Self-Correcting Coding Bot with Human Typing Visual Effect
+==========================================================
 An autonomous coding agent that:
 1. Takes a high-level programming goal from the user
 2. Uses NVIDIA API (via OpenAI SDK) to generate code iteratively
 3. Writes files to disk and opens them in VS Code for live viewing
-4. Executes code, captures errors, and self-corrects
-5. Continues until the goal is complete or max iterations reached
+4. Visually simulates human typing in VS Code (optional)
+5. Executes code, captures errors, and self-corrects
+6. Continues until the goal is complete or max iterations reached
 
 Requirements:
-    pip install openai python-dotenv
+    pip install openai python-dotenv pyautogui pyperclip
 
 Environment Variables (.env):
     NVIDIA_API_KEY=your_api_key
     NVIDIA_API_URL=https://integrate.api.nvidia.com/v1
-    NVIDIA_DEFAULT_MODEL=nvidia/nemotron-3-ultra
+    NVIDIA_DEFAULT_MODEL=nvidia/nemotron-3-ultra-550b-a55b
 """
 
 import os
@@ -24,6 +25,7 @@ import json
 import time
 import subprocess
 import signal
+import platform
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, asdict
@@ -41,7 +43,6 @@ except ImportError:
     print("[ERROR] openai package not installed. Run: pip install openai")
     sys.exit(1)
 
-
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -51,10 +52,16 @@ EXECUTION_TIMEOUT = 30           # Seconds before killing a running script
 VSCODE_REUSE_WINDOW = True       # Use --reuse-window flag
 WORKING_DIR = Path.cwd()         # Project directory
 
+# Human Typing Visual Effect Configuration
+HUMAN_TYPING = True              # Enable visual typing simulation in VS Code
+TYPING_SPEED = 0.01              # Interval between keystrokes (seconds)
+TYPING_LINE_DELAY = 0.05         # Delay between lines (seconds)
+VSCODE_FOCUS_DELAY = 1.5         # Seconds to wait for VS Code to focus after opening
+
 # Model configuration from environment
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
 NVIDIA_API_URL = os.getenv("NVIDIA_API_URL", "https://integrate.api.nvidia.com/v1")
-NVIDIA_DEFAULT_MODEL = os.getenv("NVIDIA_DEFAULT_MODEL", "nvidia/nemotron-3-ultra")
+NVIDIA_DEFAULT_MODEL = os.getenv("NVIDIA_DEFAULT_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
 
 # =============================================================================
 # SYSTEM PROMPT - Defines the agent's behavior and JSON response format
@@ -173,6 +180,115 @@ class ExecutionResult:
 
 
 # =============================================================================
+# HUMAN TYPING SIMULATION
+# =============================================================================
+
+class HumanTypingSimulator:
+    """
+    Simulates human typing in VS Code using pyautogui.
+    
+    Architecture: Write First, Type Second
+    - ALWAYS writes the perfect code to disk FIRST using open().write()
+    - Then opens file in VS Code and re-types visually
+    - If pyautogui fails, the file on disk is already correct
+    """
+    
+    def __init__(self):
+        self.enabled = HUMAN_TYPING
+        self.typing_speed = TYPING_SPEED
+        self.line_delay = TYPING_LINE_DELAY
+        self.focus_delay = VSCODE_FOCUS_DELAY
+        self.pyautogui = None
+        self.platform = platform.system().lower()
+        self.mod_key = "command" if self.platform == "darwin" else "ctrl"
+        self._init_pyautogui()
+    
+    def _init_pyautogui(self):
+        """Lazy initialization of pyautogui to avoid X11 issues on Wayland during import."""
+        if not self.enabled:
+            return
+        try:
+            import pyautogui
+            self.pyautogui = pyautogui
+            # Configure pyautogui safety features
+            self.pyautogui.FAILSAFE = True  # Move mouse to corner to abort
+            self.pyautogui.PAUSE = 0.01     # Small pause between actions
+            print(f"[HUMAN_TYPING] Enabled (platform: {self.platform}, mod_key: {self.mod_key})")
+        except Exception as e:
+            print(f"[HUMAN_TYPING] Disabled - pyautogui unavailable: {e}")
+            self.enabled = False
+            self.pyautogui = None
+    
+    def type_code(self, filepath: Path, code_content: str) -> bool:
+        """
+        Simulate human typing of code in VS Code.
+        
+        Args:
+            filepath: Path to the file (already written to disk)
+            code_content: The code content to type
+            
+        Returns:
+            True if typing completed successfully, False otherwise
+        """
+        if not self.enabled or not self.pyautogui:
+            return False
+        
+        try:
+            print(f"[HUMAN_TYPING] Starting visual typing simulation...")
+            
+            # Wait for VS Code to focus
+            print(f"[HUMAN_TYPING] Waiting {self.focus_delay}s for VS Code to focus...")
+            time.sleep(self.focus_delay)
+            
+            # Clear the editor: Select all (Ctrl/Cmd+A) then Backspace
+            print(f"[HUMAN_TYPING] Clearing editor...")
+            self._press_hotkey([self.mod_key, 'a'])  # Select all
+            time.sleep(0.1)
+            self.pyautogui.press('backspace')         # Delete selection
+            time.sleep(0.2)
+            
+            # Type the code line by line
+            lines = code_content.split('\n')
+            total_lines = len(lines)
+            
+            print(f"[HUMAN_TYPING] Typing {total_lines} lines...")
+            
+            for i, line in enumerate(lines):
+                if not self.enabled:  # Allow disabling mid-typing
+                    break
+                    
+                # Type the line
+                self.pyautogui.write(line, interval=self.typing_speed)
+                
+                # Press Enter to go to next line (except for last line)
+                if i < total_lines - 1:
+                    self.pyautogui.press('enter')
+                    time.sleep(self.line_delay)
+                
+                # Progress indicator every 20 lines
+                if (i + 1) % 20 == 0:
+                    print(f"[HUMAN_TYPING] Progress: {i + 1}/{total_lines} lines")
+            
+            # Save the file (Ctrl/Cmd+S)
+            print(f"[HUMAN_TYPING] Saving file...")
+            self._press_hotkey([self.mod_key, 's'])
+            time.sleep(0.3)
+            
+            print(f"[HUMAN_TYPING] Visual typing complete!")
+            return True
+            
+        except Exception as e:
+            print(f"[HUMAN_TYPING] Warning: Visual typing failed: {e}")
+            print(f"[HUMAN_TYPING] File on disk is correct. Continuing without visual effect.")
+            return False
+    
+    def _press_hotkey(self, keys: list):
+        """Press a combination of keys using the platform-appropriate modifier."""
+        if self.pyautogui:
+            self.pyautogui.hotkey(*keys, interval=0.05)
+
+
+# =============================================================================
 # CORE CLASSES
 # =============================================================================
 
@@ -192,6 +308,9 @@ class CodingBot:
         self.conversation_history: List[Dict[str, str]] = []
         self.project_files: Dict[str, str] = {}  # filename -> content
         self.execution_history: List[Dict[str, Any]] = []
+        
+        # Initialize human typing simulator
+        self.typing_simulator = HumanTypingSimulator()
         
         # Setup signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -282,11 +401,14 @@ class CodingBot:
             raise
     
     def write_file(self, filename: str, content: str) -> Path:
-        """Write file to disk and open in VS Code."""
+        """
+        Write file to disk (FIRST - this is the source of truth).
+        Then open in VS Code.
+        """
         filepath = WORKING_DIR / filename
         filepath.parent.mkdir(parents=True, exist_ok=True)
         
-        # Write file
+        # Write file to disk FIRST - this is the authoritative version
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(content)
         
@@ -307,6 +429,16 @@ class CodingBot:
             print(f"[VSCODE] Warning: Could not open in VS Code: {e}")
         
         return filepath
+    
+    def simulate_human_typing(self, filepath: Path, code_content: str):
+        """
+        Simulate human typing in VS Code after file is written.
+        This is purely visual - the file on disk is already correct.
+        """
+        if HUMAN_TYPING and self.typing_simulator.enabled:
+            self.typing_simulator.type_code(filepath, code_content)
+        elif HUMAN_TYPING and not self.typing_simulator.enabled:
+            print("[HUMAN_TYPING] Skipped - pyautogui not available (headless/Wayland)")
     
     def execute_file(self, filepath: Path) -> ExecutionResult:
         """Execute a Python file and capture output."""
@@ -374,6 +506,7 @@ class CodingBot:
         print(f"# Model: {self.model}")
         print(f"# Max Iterations: {MAX_ITERATIONS}")
         print(f"# Working Dir: {WORKING_DIR}")
+        print(f"# Human Typing: {'Enabled' if HUMAN_TYPING else 'Disabled'}")
         print(f"{'#'*60}")
         
         last_execution_result: Optional[ExecutionResult] = None
@@ -401,9 +534,12 @@ class CodingBot:
                     print(f"\n[ERROR] LLM reported error status: {response.next_step}")
                     break
                 
-                # 3. Write file (if filename provided)
+                # 3. Write file (if filename provided) - THIS IS THE SOURCE OF TRUTH
                 if response.filename and response.code_content:
                     filepath = self.write_file(response.filename, response.code_content)
+                    
+                    # 3b. Visual typing simulation (after file is written to disk)
+                    self.simulate_human_typing(filepath, response.code_content)
                     
                     # 4. Execute the file
                     last_execution_result = self.execute_file(filepath)
@@ -486,16 +622,17 @@ def main():
         print("Please create a .env file with:")
         print("  NVIDIA_API_KEY=your_key_here")
         print("  NVIDIA_API_URL=https://integrate.api.nvidia.com/v1")
-        print("  NVIDIA_DEFAULT_MODEL=nvidia/nemotron-3-ultra")
+        print("  NVIDIA_DEFAULT_MODEL=nvidia/nemotron-3-ultra-550b-a55b")
         sys.exit(1)
     
     print(f"[CONFIG] API URL: {NVIDIA_API_URL}")
     print(f"[CONFIG] Model: {NVIDIA_DEFAULT_MODEL}")
     print(f"[CONFIG] Working Dir: {WORKING_DIR}")
+    print(f"[CONFIG] Human Typing: {'Enabled' if HUMAN_TYPING else 'Disabled'}")
     
     # Get user goal
     print("\n" + "="*60)
-    print("SELF-CORRECTING CODING BOT")
+    print("SELF-CORRECTING CODING BOT (with Human Typing Visual Effect)")
     print("="*60)
     print("Enter your programming goal (e.g., 'Create a Python script that")
     print("calculates prime numbers up to N and includes unit tests')")
